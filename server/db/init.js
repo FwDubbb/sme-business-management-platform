@@ -8,6 +8,7 @@ const __dirname = path.dirname(__filename);
 
 const dbPath = process.env.DB_PATH || path.join(__dirname, '../../data/business.db');
 
+
 async function initializeDatabase() {
   const db = await open({
     filename: dbPath,
