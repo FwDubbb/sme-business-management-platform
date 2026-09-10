@@ -4,6 +4,7 @@ import { authenticate } from '../middleware/auth.js';
 
 const router = express.Router();
 
+
 // Get dashboard statistics
 router.get('/stats', authenticate, async (req, res) => {
   try {
