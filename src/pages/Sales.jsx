@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
-import { Plus, Search } from 'lucide-react'
+import { Plus, Search, Trash2 } from 'lucide-react'
 
 const API_URL = 'http://localhost:5000/api'
 
@@ -15,59 +15,68 @@ const Sales = () => {
   })
   const [customers, setCustomers] = useState([])
   const [products, setProducts] = useState([])
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetchSales()
-    fetchCustomers()
-    fetchProducts()
+    refreshData()
   }, [])
 
-  const fetchSales = async () => {
+  const refreshData = async () => {
+    setLoading(true)
     try {
-      const response = await axios.get(`${API_URL}/sales`)
-      setSales(response.data)
+      const [salesRes, customersRes, productsRes] = await Promise.all([
+        axios.get(`${API_URL}/sales`),
+        axios.get(`${API_URL}/customers`),
+        axios.get(`${API_URL}/inventory/products`)
+      ])
+      setSales(salesRes.data)
+      setCustomers(customersRes.data)
+      setProducts(productsRes.data)
     } catch (error) {
-      console.error('Error fetching sales:', error)
+      setError('Unable to refresh sales, customers, and stock. Please reload the page.')
+    } finally {
+      setLoading(false)
     }
   }
 
-  const fetchCustomers = async () => {
-    try {
-      const response = await axios.get(`${API_URL}/customers`)
-      setCustomers(response.data)
-    } catch (error) {
-      console.error('Error fetching customers:', error)
-    }
-  }
-
-  const fetchProducts = async () => {
-    try {
-      const response = await axios.get(`${API_URL}/inventory/products`)
-      setProducts(response.data)
-    } catch (error) {
-      console.error('Error fetching products:', error)
-    }
+  const updateItem = (index, changes) => {
+    setFormData(current => ({
+      ...current,
+      items: current.items.map((item, itemIndex) => itemIndex === index ? { ...item, ...changes } : item)
+    }))
   }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    if (saving) return
+    setError('')
+    setSaving(true)
     try {
-      await axios.post(`${API_URL}/sales`, formData)
+      await axios.post(`${API_URL}/sales`, {
+        ...formData,
+        items: formData.items.map(item => ({ ...item, quantity: Number(item.quantity), unit_price: Number(item.unit_price) }))
+      })
       setShowForm(false)
       setFormData({
         customer_id: '',
         items: [{ product_id: '', quantity: 1, unit_price: 0 }],
         notes: ''
       })
-      fetchSales()
+      await refreshData()
     } catch (error) {
-      console.error('Error creating sale:', error)
+      setError(error.response?.data?.error || 'Unable to create the sale. Please try again.')
+    } finally {
+      setSaving(false)
     }
   }
 
   const filteredSales = sales.filter(sale =>
-    sale.customer_name?.toLowerCase().includes(searchTerm.toLowerCase())
+    (sale.customer_name || '').toLowerCase().includes(searchTerm.toLowerCase())
   )
+  const totalCents = formData.items.reduce((sum, item) =>
+    sum + Math.round(Number(item.unit_price || 0) * 100) * Number(item.quantity || 0), 0)
 
   return (
     <div className="container">
@@ -75,20 +84,25 @@ const Sales = () => {
         <h1 className="text-3xl font-bold">Sales</h1>
         <button
           onClick={() => setShowForm(!showForm)}
+          disabled={saving || loading}
           className="btn btn-primary flex items-center gap-2"
         >
           <Plus size={20} /> New Sale
         </button>
       </div>
 
+      {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-4 text-red-700">{error}</p>}
+
       {showForm && (
         <div className="card mb-6">
           <h3 className="text-xl font-bold mb-4">Create New Sale</h3>
           <form onSubmit={handleSubmit}>
+            <fieldset disabled={saving || loading}>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
-                <label className="block text-sm font-bold mb-2">Customer</label>
+                <label htmlFor="sale-customer" className="block text-sm font-bold mb-2">Customer</label>
                 <select
+                  id="sale-customer"
                   value={formData.customer_id}
                   onChange={(e) => setFormData({ ...formData, customer_id: e.target.value })}
                   className="input-field"
@@ -103,55 +117,75 @@ const Sales = () => {
             <div className="mb-4">
               <label className="block text-sm font-bold mb-2">Items</label>
               {formData.items.map((item, index) => (
-                <div key={index} className="grid grid-cols-3 gap-2 mb-2">
+                <div key={index} className="grid grid-cols-1 sm:grid-cols-[2fr_1fr_1fr_auto] gap-2 mb-3">
                   <select
+                    aria-label={`Product for item ${index + 1}`}
+                    required
                     value={item.product_id}
                     onChange={(e) => {
-                      const newItems = [...formData.items]
-                      newItems[index].product_id = e.target.value
-                      setFormData({ ...formData, items: newItems })
+                      const product = products.find(product => product.id === e.target.value)
+                      updateItem(index, { product_id: e.target.value, unit_price: product?.selling_price ?? 0 })
                     }}
                     className="input-field"
                   >
                     <option value="">Select Product</option>
-                    {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    {products.map(p => <option key={p.id} value={p.id} disabled={p.quantity <= 0}>{p.name} ({p.quantity} in stock)</option>)}
                   </select>
                   <input
                     type="number"
+                    aria-label={`Quantity for item ${index + 1}`}
+                    min="1"
+                    step="1"
+                    max={products.find(product => product.id === item.product_id)?.quantity}
+                    required
                     value={item.quantity}
-                    onChange={(e) => {
-                      const newItems = [...formData.items]
-                      newItems[index].quantity = parseInt(e.target.value)
-                      setFormData({ ...formData, items: newItems })
-                    }}
+                    onChange={(e) => updateItem(index, { quantity: e.target.value })}
                     className="input-field"
                     placeholder="Quantity"
                   />
                   <input
                     type="number"
+                    aria-label={`Unit price for item ${index + 1}`}
+                    min="0"
+                    step="0.01"
+                    max="99999999.99"
+                    required
                     value={item.unit_price}
-                    onChange={(e) => {
-                      const newItems = [...formData.items]
-                      newItems[index].unit_price = parseFloat(e.target.value)
-                      setFormData({ ...formData, items: newItems })
-                    }}
+                    onChange={(e) => updateItem(index, { unit_price: e.target.value })}
                     className="input-field"
                     placeholder="Price"
                   />
+                  <button
+                    type="button"
+                    aria-label={`Remove item ${index + 1}`}
+                    disabled={formData.items.length === 1}
+                    className="btn btn-secondary"
+                    onClick={() => setFormData(current => ({ ...current, items: current.items.filter((_, itemIndex) => itemIndex !== index) }))}
+                  >
+                    <Trash2 size={18} />
+                  </button>
                 </div>
               ))}
+              <button type="button" className="btn btn-secondary" disabled={formData.items.length >= 100}
+                onClick={() => setFormData(current => ({ ...current, items: [...current.items, { product_id: '', quantity: 1, unit_price: 0 }] }))}>
+                Add Item
+              </button>
+              <p className="mt-4 text-lg font-bold" aria-live="polite">Total: ${(totalCents / 100).toFixed(2)}</p>
+              <p className="text-sm text-gray-600">Sales are recorded on credit. Record payments from the Customers page.</p>
             </div>
 
             <div className="mb-4">
-              <label className="block text-sm font-bold mb-2">Notes</label>
+              <label htmlFor="sale-notes" className="block text-sm font-bold mb-2">Notes</label>
               <textarea
+                id="sale-notes"
                 value={formData.notes}
                 onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                 className="input-field"
               />
             </div>
 
-            <button type="submit" className="btn btn-primary">Create Sale</button>
+            <button type="submit" className="btn btn-primary">{saving ? 'Saving...' : 'Create Sale'}</button>
+            </fieldset>
           </form>
         </div>
       )}
@@ -161,6 +195,7 @@ const Sales = () => {
           <Search size={20} />
           <input
             type="text"
+            aria-label="Search sales by customer"
             placeholder="Search by customer..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -179,6 +214,11 @@ const Sales = () => {
               </tr>
             </thead>
             <tbody>
+              {(loading || filteredSales.length === 0) && (
+                <tr><td colSpan={4} className="px-4 py-8 text-center text-gray-500">
+                  {loading ? 'Loading sales...' : searchTerm ? 'No sales match your search.' : 'No sales yet. Create your first sale to get started.'}
+                </td></tr>
+              )}
               {filteredSales.map(sale => (
                 <tr key={sale.id} className="border-t hover:bg-gray-50">
                   <td className="px-4 py-2">{new Date(sale.sale_date).toLocaleDateString()}</td>

@@ -8,7 +8,11 @@ const Customers = () => {
   const [customers, setCustomers] = useState([])
   const [showForm, setShowForm] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
-  const [selectedCustomer, setSelectedCustomer] = useState(null)
+  const [selectedCustomerId, setSelectedCustomerId] = useState(null)
+  const selectedCustomer = customers.find(customer => customer.id === selectedCustomerId)
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [debtsLoading, setDebtsLoading] = useState(false)
   const [showPaymentForm, setShowPaymentForm] = useState(false)
   const [customerDebts, setCustomerDebts] = useState([])
   const [paymentData, setPaymentData] = useState({
@@ -31,26 +35,42 @@ const Customers = () => {
     fetchCustomers()
   }, [])
 
+  useEffect(() => {
+    setCustomerDebts([])
+    setShowPaymentForm(false)
+    setPaymentData({ debt_id: '', amount: 0, payment_method: 'cash' })
+    if (!selectedCustomerId) return
+    const controller = new AbortController()
+    fetchCustomerDebts(selectedCustomerId, controller.signal)
+    return () => controller.abort()
+  }, [selectedCustomerId])
+
   const fetchCustomers = async () => {
     try {
       const response = await axios.get(`${API_URL}/customers`)
       setCustomers(response.data)
     } catch (error) {
-      console.error('Error fetching customers:', error)
+      setError('Unable to refresh customer balances. Please reload the page.')
     }
   }
 
-  const fetchCustomerDebts = async (customerId) => {
+  const fetchCustomerDebts = async (customerId, signal) => {
+    setDebtsLoading(true)
     try {
-      const response = await axios.get(`${API_URL}/customers/${customerId}/debts`)
+      const response = await axios.get(`${API_URL}/customers/${customerId}/debts`, { signal })
       setCustomerDebts(response.data)
     } catch (error) {
-      console.error('Error fetching debts:', error)
+      if (!signal?.aborted) setError('Unable to refresh customer debts. Please reload the page.')
+    } finally {
+      if (!signal?.aborted) setDebtsLoading(false)
     }
   }
 
   const handleAddCustomer = async (e) => {
     e.preventDefault()
+    if (saving) return
+    setError('')
+    setSaving(true)
     try {
       await axios.post(`${API_URL}/customers`, formData)
       setShowForm(false)
@@ -64,29 +84,37 @@ const Customers = () => {
         zip_code: '',
         credit_limit: 0
       })
-      fetchCustomers()
+      await fetchCustomers()
     } catch (error) {
-      console.error('Error adding customer:', error)
+      setError(error.response?.data?.error || 'Unable to add the customer. Please try again.')
+    } finally {
+      setSaving(false)
     }
   }
 
   const handleRecordPayment = async (e) => {
     e.preventDefault()
+    if (saving) return
+    setError('')
+    setSaving(true)
     try {
-      await axios.post(`${API_URL}/customers/${selectedCustomer.id}/payments`, paymentData)
+      await axios.post(`${API_URL}/customers/${selectedCustomer.id}/payments`, { ...paymentData, amount: Number(paymentData.amount) })
       setShowPaymentForm(false)
       setPaymentData({ debt_id: '', amount: 0, payment_method: 'cash' })
-      fetchCustomerDebts(selectedCustomer.id)
+      await Promise.all([fetchCustomerDebts(selectedCustomer.id), fetchCustomers()])
     } catch (error) {
-      console.error('Error recording payment:', error)
+      setError(error.response?.data?.error || 'Unable to record the payment. Please try again.')
+    } finally {
+      setSaving(false)
     }
   }
 
   const handleSelectCustomer = (customer) => {
-    setSelectedCustomer(customer)
-    fetchCustomerDebts(customer.id)
+    setSelectedCustomerId(customer.id)
   }
 
+  const pendingDebts = customerDebts.filter(debt => debt.status !== 'paid' && debt.remaining_amount > 0)
+  const selectedDebt = pendingDebts.find(debt => debt.id === paymentData.debt_id)
   const filteredCustomers = customers.filter(customer =>
     customer.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     customer.email?.toLowerCase().includes(searchTerm.toLowerCase())
@@ -98,16 +126,20 @@ const Customers = () => {
         <h1 className="text-3xl font-bold">Customers</h1>
         <button
           onClick={() => setShowForm(!showForm)}
+          disabled={saving}
           className="btn btn-primary flex items-center gap-2"
         >
           <Plus size={20} /> Add Customer
         </button>
       </div>
 
+      {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-4 text-red-700">{error}</p>}
+
       {showForm && (
         <div className="card mb-6">
           <h3 className="text-xl font-bold mb-4">Add New Customer</h3>
           <form onSubmit={handleAddCustomer}>
+            <fieldset disabled={saving}>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="block text-sm font-bold mb-2">Name</label>
@@ -185,6 +217,7 @@ const Customers = () => {
               </div>
             </div>
             <button type="submit" className="btn btn-primary">Add Customer</button>
+            </fieldset>
           </form>
         </div>
       )}
@@ -205,10 +238,13 @@ const Customers = () => {
 
             <div className="space-y-2 max-h-96 overflow-y-auto">
               {filteredCustomers.map(customer => (
-                <div
+                <button
+                  type="button"
+                  disabled={saving}
+                  aria-pressed={selectedCustomer?.id === customer.id}
                   key={customer.id}
                   onClick={() => handleSelectCustomer(customer)}
-                  className={`p-3 rounded cursor-pointer transition-colors ${
+                  className={`w-full text-left p-3 rounded cursor-pointer transition-colors ${
                     selectedCustomer?.id === customer.id
                       ? 'bg-blue-100 border-2 border-blue-500'
                       : 'bg-gray-50 hover:bg-gray-100 border-2 border-transparent'
@@ -217,7 +253,7 @@ const Customers = () => {
                   <p className="font-bold">{customer.name}</p>
                   <p className="text-sm text-gray-600">{customer.email}</p>
                   <p className="text-sm font-semibold text-red-600">Debt: ${customer.total_debt?.toFixed(2)}</p>
-                </div>
+                </button>
               ))}
             </div>
           </div>
@@ -257,9 +293,10 @@ const Customers = () => {
 
             <div className="card">
               <div className="flex justify-between items-center mb-4">
-                <h3 className="text-xl font-bold">Pending Debts</h3>
+                <h3 className="text-xl font-bold">Customer Debts</h3>
                 <button
                   onClick={() => setShowPaymentForm(!showPaymentForm)}
+                  disabled={saving || debtsLoading || pendingDebts.length === 0}
                   className="btn btn-primary flex items-center gap-2 text-sm"
                 >
                   <CreditCard size={16} /> Record Payment
@@ -268,37 +305,43 @@ const Customers = () => {
 
               {showPaymentForm && (
                 <form onSubmit={handleRecordPayment} className="mb-6 p-4 bg-gray-50 rounded">
+                  <fieldset disabled={saving || debtsLoading}>
                   <div className="mb-4">
-                    <label className="block text-sm font-bold mb-2">Select Debt</label>
+                    <label htmlFor="payment-debt" className="block text-sm font-bold mb-2">Select Debt</label>
                     <select
+                      id="payment-debt"
                       value={paymentData.debt_id}
                       onChange={(e) => setPaymentData({ ...paymentData, debt_id: e.target.value })}
                       className="input-field"
                       required
                     >
                       <option value="">Select Debt</option>
-                      {customerDebts.map(debt => (
+                      {pendingDebts.map(debt => (
                         <option key={debt.id} value={debt.id}>
-                          ${debt.amount?.toFixed(2)} - {debt.status}
+                          ${debt.remaining_amount?.toFixed(2)} remaining
                         </option>
                       ))}
                     </select>
                   </div>
                   <div className="grid grid-cols-2 gap-4 mb-4">
                     <div>
-                      <label className="block text-sm font-bold mb-2">Amount ($)</label>
+                      <label htmlFor="payment-amount" className="block text-sm font-bold mb-2">Amount ($)</label>
                       <input
+                        id="payment-amount"
                         type="number"
                         step="0.01"
+                        min="0.01"
+                        max={selectedDebt?.remaining_amount}
                         value={paymentData.amount}
-                        onChange={(e) => setPaymentData({ ...paymentData, amount: parseFloat(e.target.value) })}
+                        onChange={(e) => setPaymentData({ ...paymentData, amount: e.target.value })}
                         className="input-field"
                         required
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-bold mb-2">Payment Method</label>
+                      <label htmlFor="payment-method" className="block text-sm font-bold mb-2">Payment Method</label>
                       <select
+                        id="payment-method"
                         value={paymentData.payment_method}
                         onChange={(e) => setPaymentData({ ...paymentData, payment_method: e.target.value })}
                         className="input-field"
@@ -310,7 +353,8 @@ const Customers = () => {
                       </select>
                     </div>
                   </div>
-                  <button type="submit" className="btn btn-primary w-full">Record Payment</button>
+                  <button type="submit" disabled={!selectedDebt} className="btn btn-primary w-full">{saving ? 'Saving...' : 'Record Payment'}</button>
+                  </fieldset>
                 </form>
               )}
 
@@ -325,6 +369,11 @@ const Customers = () => {
                     </tr>
                   </thead>
                   <tbody>
+                    {(debtsLoading || customerDebts.length === 0) && (
+                      <tr><td colSpan={4} className="px-4 py-6 text-center text-gray-500">
+                        {debtsLoading ? 'Loading debts...' : 'This customer has no debts.'}
+                      </td></tr>
+                    )}
                     {customerDebts.map(debt => (
                       <tr key={debt.id} className="border-t hover:bg-gray-50">
                         <td className="px-4 py-2 font-bold">${debt.amount?.toFixed(2)}</td>

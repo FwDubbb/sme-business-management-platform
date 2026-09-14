@@ -1,21 +1,9 @@
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { getDb, closeDb } from './connection.js';
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const dbPath = process.env.DB_PATH || path.join(__dirname, '../../data/business.db');
-
-
-async function initializeDatabase() {
-  const db = await open({
-    filename: dbPath,
-    driver: sqlite3.Database
-  });
-
-  console.log('Initializing database...');
+export async function initializeDatabase(db) {
 
   // Users table
   await db.exec(`
@@ -152,8 +140,16 @@ async function initializeDatabase() {
     )
   `);
 
-  console.log('✅ Database initialized successfully!');
-  await db.close();
 }
 
-initializeDatabase().catch(console.error);
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+  try {
+    await initializeDatabase(await getDb());
+    console.log('Database initialized successfully!');
+  } catch (error) {
+    console.error(error);
+    process.exitCode = 1;
+  } finally {
+    await closeDb();
+  }
+}

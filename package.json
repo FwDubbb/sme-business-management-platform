@@ -9,6 +9,7 @@
     "server:dev": "nodemon --exec node server/index.js",
     "client:dev": "vite",
     "build": "vite build",
+    "test": "node --test",
     "preview": "vite preview",
     "start": "node server/index.js",
     "db:init": "node server/db/init.js",
