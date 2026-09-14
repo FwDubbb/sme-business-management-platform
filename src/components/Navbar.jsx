@@ -1,84 +1,31 @@
-import { NavLink, useLocation, useNavigate } from 'react-router-dom'
-import { Menu, X, LogOut } from 'lucide-react'
+import { NavLink, useLocation } from 'react-router-dom'
 import { useEffect, useRef, useState } from 'react'
-
-const links = [
-  ['/', 'Dashboard'],
-  ['/sales', 'Sales'],
-  ['/inventory', 'Inventory'],
-  ['/customers', 'Customers'],
-  ['/expenses', 'Expenses']
-]
-
-const linkClassName = ({ isActive }) =>
-  `rounded px-3 py-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white ${
-    isActive ? 'bg-blue-800 font-semibold' : 'hover:bg-blue-700'
-  }`
-
-const Navbar = ({ user, onLogout }) => {
-  const navigate = useNavigate()
-  const [isOpen, setIsOpen] = useState(false)
-  const location = useLocation()
-  const menuButton = useRef(null)
-
-  useEffect(() => {
-    setIsOpen(false)
-  }, [location.pathname])
-
-  const handleKeyDown = (event) => {
-    if (event.key === 'Escape' && isOpen) {
-      setIsOpen(false)
-      menuButton.current?.focus()
-    }
-  }
-
-  const handleLogout = () => {
-    onLogout()
-    navigate('/login')
-  }
-
-  return (
-    <nav aria-label="Main navigation" onKeyDown={handleKeyDown} className="bg-blue-600 text-white shadow-lg">
-      <div className="container mx-auto px-4 py-4 flex flex-wrap gap-3 justify-between items-center">
-        <div className="flex items-center gap-2">
-          <NavLink to="/" className="text-xl sm:text-2xl font-bold">SME Manager</NavLink>
-        </div>
-
-        <div className="hidden lg:flex gap-1">
-          {links.map(([to, label]) => (
-            <NavLink key={to} to={to} end={to === '/'} className={linkClassName}>{label}</NavLink>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-2 sm:gap-4">
-          <span className="hidden sm:block max-w-32 truncate text-sm">{user?.name}</span>
-          <button
-            onClick={handleLogout}
-            className="flex items-center gap-2 bg-blue-700 hover:bg-blue-800 px-3 py-2 rounded"
-          >
-            <LogOut size={18} />
-            Logout
-          </button>
-          <button
-            ref={menuButton}
-            type="button"
-            aria-label={isOpen ? 'Close navigation menu' : 'Open navigation menu'}
-            aria-expanded={isOpen}
-            aria-controls="mobile-navigation"
-            onClick={() => setIsOpen(open => !open)}
-            className="rounded p-2 hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white lg:hidden"
-          >
-            {isOpen ? <X size={24} /> : <Menu size={24} />}
-          </button>
-        </div>
-        <div id="mobile-navigation" className={`${isOpen ? 'flex' : 'hidden'} w-full flex-col gap-1 border-t border-blue-400 pt-3 lg:hidden`}>
-          {links.map(([to, label]) => (
-            <NavLink key={to} to={to} end={to === '/'} onClick={() => setIsOpen(false)} className={linkClassName}>{label}</NavLink>
-          ))}
-        </div>
-      </div>
-    </nav>
-  )
+import { ArrowUpRight, BarChart3, Boxes, ChevronRight, Command, LayoutDashboard, LogOut, Menu, Receipt, ShoppingBag, Users, X } from 'lucide-react'
+import { initials } from '../lib/workspace'
+const links = [ ['/', 'Overview', LayoutDashboard], ['/sales', 'Sales', ShoppingBag], ['/inventory', 'Inventory', Boxes], ['/customers', 'Customers', Users], ['/expenses', 'Expenses', Receipt] ]
+export function Brand() {
+  return <span className="brand"><span className="brand-mark"><Command size={22} strokeWidth={2} /></span><span>SME<span className="brand-light">workspace</span></span></span>
 }
-
-export default Navbar
+export default function Navbar({ user, onLogout, children }) {
+  const [open, setOpen] = useState(false)
+  const location = useLocation()
+  const toggle = useRef(null)
+  const mobile = useRef(null)
+  const current = links.find(([path]) => path === location.pathname)?.[1] || 'Workspace'
+  useEffect(() => setOpen(false), [location.pathname])
+  useEffect(() => {
+    if (open) mobile.current.showModal()
+    else mobile.current.close()
+    const previous = document.body.style.overflow
+    if (open) document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = previous }
+  }, [open])
+  const navigation = <>
+    <NavLink to="/" className="brand-link" onClick={() => setOpen(false)}><Brand /></NavLink>
+    <div className="workspace-label"><span className="workspace-icon">B</span><div><strong>My business</strong><span>Business workspace</span></div></div>
+    <p className="nav-section-label">WORKSPACE</p>
+    <div className="nav-links">{links.map(([to, label, Icon]) => <NavLink key={to} to={to} end={to === '/'} onClick={() => setOpen(false)} className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}><Icon size={19} strokeWidth={1.7} /><span>{label}</span><ChevronRight size={14} className="nav-arrow" /></NavLink>)}</div>
+    <div className="sidebar-bottom"><div className="sidebar-note"><BarChart3 size={19} /><strong>A little clarity. Every day.</strong><p>Your sales, stock, and customer balances, together.</p><NavLink to="/sales?new=1" onClick={() => setOpen(false)}>Record a sale <ArrowUpRight size={14} /></NavLink></div><div className="profile"><span className="avatar">{initials(user?.name)}</span><div><strong>{user?.name || 'Your account'}</strong><span title={user?.email}>{user?.email}</span></div><button className="icon-button" title="Sign out" aria-label="Sign out" onClick={onLogout}><LogOut size={17} /></button></div></div>
+  </>
+  return <div className="app-shell"><a className="skip-link" href="#main-content">Skip to content</a><aside className="sidebar"><nav aria-label="Main navigation">{navigation}</nav></aside><dialog ref={mobile} className="mobile-sidebar" onCancel={event => { event.preventDefault(); setOpen(false); toggle.current?.focus() }}><button className="mobile-close icon-button" aria-label="Close navigation" onClick={() => setOpen(false)}><X size={20} /></button><nav aria-label="Mobile navigation">{navigation}</nav></dialog><div className="workspace-main"><div className="topbar"><div className="breadcrumb"><button ref={toggle} className="icon-button mobile-toggle" aria-label="Open navigation" aria-expanded={open} onClick={() => setOpen(true)}><Menu size={20} /></button><span>Workspace</span><ChevronRight size={14} /><strong>{current}</strong></div><div className="topbar-end"><span className="today-label">{new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span><span className="avatar avatar-small" title={user?.name}>{initials(user?.name)}</span></div></div><main id="main-content" className="page-content">{children}</main><footer className="workspace-footer"><span>SME Workspace</span><span>A clearer picture of your business.</span></footer></div></div>
+}

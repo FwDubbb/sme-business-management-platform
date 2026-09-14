@@ -1,402 +1,66 @@
-import { useState, useEffect } from 'react'
-import axios from 'axios'
-import { Plus, Search, CreditCard } from 'lucide-react'
-
-const API_URL = 'http://localhost:5000/api'
-
-const Customers = () => {
-  const [customers, setCustomers] = useState([])
-  const [showForm, setShowForm] = useState(false)
-  const [searchTerm, setSearchTerm] = useState('')
-  const [selectedCustomerId, setSelectedCustomerId] = useState(null)
-  const selectedCustomer = customers.find(customer => customer.id === selectedCustomerId)
-  const [error, setError] = useState('')
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { ArrowDownToLine, ArrowUpRight, CreditCard, Mail, Pencil, Plus } from 'lucide-react'
+import api, { errorMessage } from '../lib/api'
+import { dateLabel, exportCsv, initials, money, useData } from '../lib/workspace'
+import { Drawer, EmptyState, Field, MetricStrip, Notice, PageHeader, Pagination, SearchBox, Status, TableMessage, usePagination } from '../components/UI'
+const blank = { name: '', email: '', phone: '', address: '', city: '', state: '', zip_code: '', credit_limit: 0 }
+const EMPTY = []
+export default function Customers() {
+  const { data: [customers = EMPTY], loading, error, reload } = useData(['/customers'])
+  const [params, setParams] = useSearchParams()
+  const [search, setSearch] = useState('')
+  const [form, setForm] = useState(blank)
   const [saving, setSaving] = useState(false)
-  const [debtsLoading, setDebtsLoading] = useState(false)
-  const [showPaymentForm, setShowPaymentForm] = useState(false)
-  const [customerDebts, setCustomerDebts] = useState([])
-  const [paymentData, setPaymentData] = useState({
-    debt_id: '',
-    amount: 0,
-    payment_method: 'cash'
-  })
-  const [formData, setFormData] = useState({
-    name: '',
-    email: '',
-    phone: '',
-    address: '',
-    city: '',
-    state: '',
-    zip_code: '',
-    credit_limit: 0
-  })
-
-  useEffect(() => {
-    fetchCustomers()
-  }, [])
-
-  useEffect(() => {
-    setCustomerDebts([])
-    setShowPaymentForm(false)
-    setPaymentData({ debt_id: '', amount: 0, payment_method: 'cash' })
-    if (!selectedCustomerId) return
-    const controller = new AbortController()
-    fetchCustomerDebts(selectedCustomerId, controller.signal)
-    return () => controller.abort()
-  }, [selectedCustomerId])
-
-  const fetchCustomers = async () => {
-    try {
-      const response = await axios.get(`${API_URL}/customers`)
-      setCustomers(response.data)
-    } catch (error) {
-      setError('Unable to refresh customer balances. Please reload the page.')
-    }
-  }
-
-  const fetchCustomerDebts = async (customerId, signal) => {
-    setDebtsLoading(true)
-    try {
-      const response = await axios.get(`${API_URL}/customers/${customerId}/debts`, { signal })
-      setCustomerDebts(response.data)
-    } catch (error) {
-      if (!signal?.aborted) setError('Unable to refresh customer debts. Please reload the page.')
-    } finally {
-      if (!signal?.aborted) setDebtsLoading(false)
-    }
-  }
-
-  const handleAddCustomer = async (e) => {
-    e.preventDefault()
+  const [formError, setFormError] = useState('')
+  const [notice, setNotice] = useState('')
+  const balance = params.get('balance') || 'all'
+  const editing = params.get('edit')
+  const creating = params.has('new')
+  const customer = customers.find(customer => customer.id === params.get('detail'))
+  useEffect(() => { if (editing) { const record = customers.find(customer => customer.id === editing); if (record) setForm(record) } else if (creating) setForm({ ...blank }) }, [editing, creating, customers])
+  const filtered = customers.filter(customer => `${customer.name} ${customer.email || ''} ${customer.phone || ''}`.toLowerCase().includes(search.toLowerCase()) && (balance === 'all' || (balance === 'outstanding' ? customer.total_debt > 0 : !customer.total_debt)))
+  const { page, setPage, visible } = usePagination(filtered, `${search}|${balance}`)
+  const close = () => setParams(balance === 'all' ? {} : { balance })
+  const open = customer => { setForm(customer || { ...blank }); setFormError(''); setParams(customer ? { edit: customer.id, balance } : { new: '1', balance }) }
+  const save = async event => {
+    event.preventDefault()
     if (saving) return
-    setError('')
-    setSaving(true)
+    setSaving(true); setFormError('')
     try {
-      await axios.post(`${API_URL}/customers`, formData)
-      setShowForm(false)
-      setFormData({
-        name: '',
-        email: '',
-        phone: '',
-        address: '',
-        city: '',
-        state: '',
-        zip_code: '',
-        credit_limit: 0
-      })
-      await fetchCustomers()
-    } catch (error) {
-      setError(error.response?.data?.error || 'Unable to add the customer. Please try again.')
-    } finally {
-      setSaving(false)
-    }
+      const payload = { ...form, credit_limit: Number(form.credit_limit) }
+      if (editing) await api.put(`/customers/${editing}`, payload)
+      else await api.post('/customers', payload)
+      setNotice(editing ? 'Customer details updated.' : 'Customer added to your directory.'); close(); await reload()
+    } catch (error) { setFormError(errorMessage(error)) } finally { setSaving(false) }
   }
-
-  const handleRecordPayment = async (e) => {
-    e.preventDefault()
-    if (saving) return
-    setError('')
-    setSaving(true)
-    try {
-      await axios.post(`${API_URL}/customers/${selectedCustomer.id}/payments`, { ...paymentData, amount: Number(paymentData.amount) })
-      setShowPaymentForm(false)
-      setPaymentData({ debt_id: '', amount: 0, payment_method: 'cash' })
-      await Promise.all([fetchCustomerDebts(selectedCustomer.id), fetchCustomers()])
-    } catch (error) {
-      setError(error.response?.data?.error || 'Unable to record the payment. Please try again.')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const handleSelectCustomer = (customer) => {
-    setSelectedCustomerId(customer.id)
-  }
-
-  const pendingDebts = customerDebts.filter(debt => debt.status !== 'paid' && debt.remaining_amount > 0)
-  const selectedDebt = pendingDebts.find(debt => debt.id === paymentData.debt_id)
-  const filteredCustomers = customers.filter(customer =>
-    customer.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    customer.email?.toLowerCase().includes(searchTerm.toLowerCase())
-  )
-
-  return (
-    <div className="container">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-bold">Customers</h1>
-        <button
-          onClick={() => setShowForm(!showForm)}
-          disabled={saving}
-          className="btn btn-primary flex items-center gap-2"
-        >
-          <Plus size={20} /> Add Customer
-        </button>
-      </div>
-
-      {error && <p role="alert" className="mb-4 rounded-lg bg-red-50 p-4 text-red-700">{error}</p>}
-
-      {showForm && (
-        <div className="card mb-6">
-          <h3 className="text-xl font-bold mb-4">Add New Customer</h3>
-          <form onSubmit={handleAddCustomer}>
-            <fieldset disabled={saving}>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-              <div>
-                <label className="block text-sm font-bold mb-2">Name</label>
-                <input
-                  type="text"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  className="input-field"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-bold mb-2">Email</label>
-                <input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  className="input-field"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-bold mb-2">Phone</label>
-                <input
-                  type="tel"
-                  value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                  className="input-field"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-bold mb-2">Credit Limit ($)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  value={formData.credit_limit}
-                  onChange={(e) => setFormData({ ...formData, credit_limit: parseFloat(e.target.value) })}
-                  className="input-field"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-bold mb-2">Address</label>
-                <input
-                  type="text"
-                  value={formData.address}
-                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                  className="input-field"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-bold mb-2">City</label>
-                <input
-                  type="text"
-                  value={formData.city}
-                  onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-                  className="input-field"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-bold mb-2">State</label>
-                <input
-                  type="text"
-                  value={formData.state}
-                  onChange={(e) => setFormData({ ...formData, state: e.target.value })}
-                  className="input-field"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-bold mb-2">ZIP Code</label>
-                <input
-                  type="text"
-                  value={formData.zip_code}
-                  onChange={(e) => setFormData({ ...formData, zip_code: e.target.value })}
-                  className="input-field"
-                />
-              </div>
-            </div>
-            <button type="submit" className="btn btn-primary">Add Customer</button>
-            </fieldset>
-          </form>
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-1">
-          <div className="card">
-            <div className="flex items-center gap-2 mb-4">
-              <Search size={20} />
-              <input
-                type="text"
-                placeholder="Search customers..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="input-field flex-1"
-              />
-            </div>
-
-            <div className="space-y-2 max-h-96 overflow-y-auto">
-              {filteredCustomers.map(customer => (
-                <button
-                  type="button"
-                  disabled={saving}
-                  aria-pressed={selectedCustomer?.id === customer.id}
-                  key={customer.id}
-                  onClick={() => handleSelectCustomer(customer)}
-                  className={`w-full text-left p-3 rounded cursor-pointer transition-colors ${
-                    selectedCustomer?.id === customer.id
-                      ? 'bg-blue-100 border-2 border-blue-500'
-                      : 'bg-gray-50 hover:bg-gray-100 border-2 border-transparent'
-                  }`}
-                >
-                  <p className="font-bold">{customer.name}</p>
-                  <p className="text-sm text-gray-600">{customer.email}</p>
-                  <p className="text-sm font-semibold text-red-600">Debt: ${customer.total_debt?.toFixed(2)}</p>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {selectedCustomer && (
-          <div className="lg:col-span-2">
-            <div className="card mb-6">
-              <h3 className="text-xl font-bold mb-4">Customer Details</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-sm text-gray-600">Name</p>
-                  <p className="font-bold">{selectedCustomer.name}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Email</p>
-                  <p className="font-bold">{selectedCustomer.email || 'N/A'}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Phone</p>
-                  <p className="font-bold">{selectedCustomer.phone || 'N/A'}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Credit Limit</p>
-                  <p className="font-bold">${selectedCustomer.credit_limit?.toFixed(2)}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Total Debt</p>
-                  <p className="font-bold text-red-600">${selectedCustomer.total_debt?.toFixed(2)}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Address</p>
-                  <p className="font-bold">{selectedCustomer.address || 'N/A'}</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="card">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-xl font-bold">Customer Debts</h3>
-                <button
-                  onClick={() => setShowPaymentForm(!showPaymentForm)}
-                  disabled={saving || debtsLoading || pendingDebts.length === 0}
-                  className="btn btn-primary flex items-center gap-2 text-sm"
-                >
-                  <CreditCard size={16} /> Record Payment
-                </button>
-              </div>
-
-              {showPaymentForm && (
-                <form onSubmit={handleRecordPayment} className="mb-6 p-4 bg-gray-50 rounded">
-                  <fieldset disabled={saving || debtsLoading}>
-                  <div className="mb-4">
-                    <label htmlFor="payment-debt" className="block text-sm font-bold mb-2">Select Debt</label>
-                    <select
-                      id="payment-debt"
-                      value={paymentData.debt_id}
-                      onChange={(e) => setPaymentData({ ...paymentData, debt_id: e.target.value })}
-                      className="input-field"
-                      required
-                    >
-                      <option value="">Select Debt</option>
-                      {pendingDebts.map(debt => (
-                        <option key={debt.id} value={debt.id}>
-                          ${debt.remaining_amount?.toFixed(2)} remaining
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4 mb-4">
-                    <div>
-                      <label htmlFor="payment-amount" className="block text-sm font-bold mb-2">Amount ($)</label>
-                      <input
-                        id="payment-amount"
-                        type="number"
-                        step="0.01"
-                        min="0.01"
-                        max={selectedDebt?.remaining_amount}
-                        value={paymentData.amount}
-                        onChange={(e) => setPaymentData({ ...paymentData, amount: e.target.value })}
-                        className="input-field"
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="payment-method" className="block text-sm font-bold mb-2">Payment Method</label>
-                      <select
-                        id="payment-method"
-                        value={paymentData.payment_method}
-                        onChange={(e) => setPaymentData({ ...paymentData, payment_method: e.target.value })}
-                        className="input-field"
-                      >
-                        <option value="cash">Cash</option>
-                        <option value="check">Check</option>
-                        <option value="bank_transfer">Bank Transfer</option>
-                        <option value="card">Card</option>
-                      </select>
-                    </div>
-                  </div>
-                  <button type="submit" disabled={!selectedDebt} className="btn btn-primary w-full">{saving ? 'Saving...' : 'Record Payment'}</button>
-                  </fieldset>
-                </form>
-              )}
-
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-100">
-                    <tr>
-                      <th className="px-4 py-2 text-left">Amount</th>
-                      <th className="px-4 py-2 text-left">Remaining</th>
-                      <th className="px-4 py-2 text-left">Status</th>
-                      <th className="px-4 py-2 text-left">Due Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(debtsLoading || customerDebts.length === 0) && (
-                      <tr><td colSpan={4} className="px-4 py-6 text-center text-gray-500">
-                        {debtsLoading ? 'Loading debts...' : 'This customer has no debts.'}
-                      </td></tr>
-                    )}
-                    {customerDebts.map(debt => (
-                      <tr key={debt.id} className="border-t hover:bg-gray-50">
-                        <td className="px-4 py-2 font-bold">${debt.amount?.toFixed(2)}</td>
-                        <td className="px-4 py-2 text-red-600 font-bold">${debt.remaining_amount?.toFixed(2)}</td>
-                        <td className="px-4 py-2">
-                          <span className={`px-2 py-1 rounded text-sm font-semibold ${
-                            debt.status === 'paid' ? 'bg-green-200 text-green-800' : 'bg-yellow-200 text-yellow-800'
-                          }`}>
-                            {debt.status}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2">{debt.due_date ? new Date(debt.due_date).toLocaleDateString() : 'N/A'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
+  const exportCustomers = () => exportCsv('customers.csv', [{ label: 'Name', value: row => row.name }, { label: 'Email', value: row => row.email }, { label: 'Phone', value: row => row.phone }, { label: 'Balance', value: row => row.total_debt }, { label: 'Credit limit', value: row => row.credit_limit }], filtered)
+  return <>
+    <PageHeader eyebrow="PEOPLE & RELATIONSHIPS" title="Customers" description="Good business starts with knowing your customers."><button className="btn btn-secondary" disabled={!filtered.length} onClick={exportCustomers}><ArrowDownToLine size={15} />Export</button><button className="btn btn-primary" onClick={() => open()}><Plus size={16} />Add customer</button></PageHeader>
+    <Notice error onRetry={reload}>{error}</Notice><Notice onDismiss={() => setNotice('')}>{notice}</Notice>
+    <MetricStrip items={[{ label: 'Your customers', value: customers.length, note: 'People in your directory' }, { label: 'Outstanding balance', value: money(customers.reduce((sum, customer) => sum + (customer.total_debt || 0), 0)), note: 'Total customer debt', accent: true }, { label: 'With a balance', value: customers.filter(customer => customer.total_debt > 0).length, note: 'Customers with unpaid debt' }, { label: 'Settled accounts', value: customers.filter(customer => !customer.total_debt).length, note: 'No outstanding balance' }]} />
+    <section className="surface"><div className="tabs">{[['all', 'All customers'], ['outstanding', 'Outstanding balances'], ['settled', 'Settled accounts']].map(([value, label]) => <button key={value} aria-pressed={balance === value} className={balance === value ? 'active' : ''} onClick={() => setParams(value === 'all' ? {} : { balance: value })}>{label}</button>)}</div><div className="toolbar"><SearchBox value={search} onChange={setSearch} placeholder="Search name, email, or phone…" /><span className="muted" style={{ fontSize: 11 }}>A–Z by customer name</span></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Customer</th><th>Contact</th><th>Location</th><th className="align-right">Balance</th><th>Account</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{loading || !visible.length ? <TableMessage columns={6} loading={loading} title={customers.length ? 'No customers match your search' : 'Start with a name'} description={customers.length ? 'Try another search or balance filter.' : 'Create a customer profile to keep sales, contact details, and payments together.'} action={!customers.length && <button className="btn btn-primary" onClick={() => open()}><Plus size={14} />Add customer</button>} /> : visible.map(customer => <tr key={customer.id}><td><div className="cell-with-icon"><span className="avatar">{initials(customer.name)}</span><div><button className="row-link" onClick={() => setParams({ detail: customer.id, balance })}>{customer.name}</button><span className="cell-sub">Added {dateLabel(customer.created_at)}</span></div></div></td><td>{customer.email || 'No email added'}<span className="cell-sub">{customer.phone || 'No phone added'}</span></td><td>{[customer.city, customer.state].filter(Boolean).join(', ') || '—'}</td><td className="align-right primary-cell numeric">{money(customer.total_debt)}</td><td><Status tone={customer.total_debt > 0 ? 'amber' : 'green'}>{customer.total_debt > 0 ? 'Balance due' : 'Settled'}</Status></td><td><button className="icon-button" aria-label={`View ${customer.name}`} onClick={() => setParams({ detail: customer.id, balance })}><ArrowUpRight size={16} /></button></td></tr>)}</tbody></table></div><Pagination total={filtered.length} page={page} onChange={setPage} /></section>
+    {(creating || editing) && <Drawer title={editing ? 'Edit customer' : 'Add customer'} description="The details that make every interaction easier." onClose={close} busy={saving}><form onSubmit={save}><fieldset disabled={saving}><div className="drawer-body"><Notice error>{formError}</Notice><div className="form-grid"><Field label="Full name or business name" className="field-full"><input required autoFocus value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="e.g. Morgan Lee" /></Field><Field label="Email"><input type="email" value={form.email || ''} onChange={event => setForm({ ...form, email: event.target.value })} placeholder="name@business.com" /></Field><Field label="Phone"><input type="tel" value={form.phone || ''} onChange={event => setForm({ ...form, phone: event.target.value })} /></Field><Field label="Street address" className="field-full"><input value={form.address || ''} onChange={event => setForm({ ...form, address: event.target.value })} /></Field><Field label="City"><input value={form.city || ''} onChange={event => setForm({ ...form, city: event.target.value })} /></Field><Field label="State / region"><input value={form.state || ''} onChange={event => setForm({ ...form, state: event.target.value })} /></Field><Field label="ZIP / postal code"><input value={form.zip_code || ''} onChange={event => setForm({ ...form, zip_code: event.target.value })} /></Field><Field label="Credit limit ($)" hint="For reference; sales do not automatically enforce this limit."><input type="number" min="0" max="99999999.99" step="0.01" required value={form.credit_limit ?? 0} onChange={event => setForm({ ...form, credit_limit: event.target.value })} /></Field></div></div><div className="drawer-footer"><button type="button" className="btn btn-secondary" onClick={close}>Cancel</button><button type="submit" className="btn btn-primary">{saving ? 'Saving…' : editing ? 'Save changes' : 'Add customer'}</button></div></fieldset></form></Drawer>}
+    {customer && <CustomerDetails key={customer.id} customer={customer} onClose={close} onEdit={() => open(customer)} onUpdated={reload} />}
+  </>
 }
-
-export default Customers
+function CustomerDetails({ customer, onClose, onEdit, onUpdated }) {
+  const { data: [debts = [], payments = []], loading, error, reload } = useData([`/customers/${customer.id}/debts`, `/customers/${customer.id}/payments`])
+  const [payment, setPayment] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [formError, setFormError] = useState('')
+  const [notice, setNotice] = useState('')
+  const selectedDebt = debts.find(debt => debt.id === payment?.debt_id)
+  const savePayment = async event => {
+    event.preventDefault()
+    if (saving) return
+    setSaving(true); setFormError('')
+    try {
+      await api.post(`/customers/${customer.id}/payments`, { ...payment, amount: Number(payment.amount) })
+      setPayment(null); setNotice('Payment recorded. The customer balance has been updated.'); await Promise.all([reload(), onUpdated()])
+    } catch (error) { setFormError(errorMessage(error)) } finally { setSaving(false) }
+  }
+  return <Drawer title="Customer profile" description="Contact details, balances, and a complete payment trail." onClose={onClose} busy={saving} wide><div className="drawer-body"><Notice error onRetry={reload}>{error}</Notice><Notice onDismiss={() => setNotice('')}>{notice}</Notice><div className="detail-heading"><span className="avatar">{initials(customer.name)}</span><div style={{ flex: 1 }}><h3>{customer.name}</h3><p>Customer since {dateLabel(customer.created_at)}</p></div><button className="btn btn-secondary" disabled={saving} onClick={onEdit}><Pencil size={13} />Edit</button></div><dl className="detail-list"><div><dt>Email</dt><dd>{customer.email ? <a className="text-button" href={`mailto:${customer.email}`}><Mail size={13} />{customer.email}</a> : 'Not provided'}</dd></div><div><dt>Phone</dt><dd>{customer.phone || 'Not provided'}</dd></div><div><dt>Address</dt><dd>{[customer.address, customer.city, customer.state, customer.zip_code].filter(Boolean).join(', ') || 'Not provided'}</dd></div><div><dt>Credit limit · for reference</dt><dd>{money(customer.credit_limit)}</dd></div></dl><div className="detail-balance"><span>Outstanding balance</span><strong>{money(customer.total_debt)}</strong></div>
+    {payment && <form onSubmit={savePayment}><fieldset disabled={saving}><div className="form-section"><h3>Record a payment</h3><p>Sale #{selectedDebt?.sale_id?.slice(0, 8).toUpperCase()} · {money(selectedDebt?.remaining_amount)} remaining</p></div><Notice error>{formError}</Notice><div className="form-grid"><Field label="Payment amount ($)"><input type="number" required min="0.01" max={selectedDebt?.remaining_amount} step="0.01" autoFocus value={payment.amount} onChange={event => setPayment({ ...payment, amount: event.target.value })} /></Field><Field label="Payment method"><select value={payment.payment_method} onChange={event => setPayment({ ...payment, payment_method: event.target.value })}><option value="cash">Cash</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option><option value="check">Check</option></select></Field></div><div className="quick-actions"><button type="submit" className="btn btn-primary">{saving ? 'Recording…' : 'Record payment'}</button><button type="button" className="btn btn-secondary" onClick={() => setPayment(null)}>Cancel</button></div></fieldset></form>}
+    <div className="form-section"><h3>Sales & balances</h3><p>Record a payment against any outstanding sale.</p></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Sale</th><th>Original amount</th><th>Remaining</th><th>Status</th><th><span className="sr-only">Record payment</span></th></tr></thead><tbody>{loading || !debts.length ? <TableMessage columns={5} loading={loading} title="No customer debts" description="Credit sales for this customer will appear here." /> : debts.map(debt => <tr key={debt.id}><td className="mono">#{debt.sale_id?.slice(0, 8).toUpperCase() || '—'}</td><td>{money(debt.amount)}</td><td className="primary-cell">{money(debt.remaining_amount)}</td><td><Status>{debt.status}</Status></td><td>{debt.remaining_amount > 0 && <button className="text-button" disabled={saving} onClick={() => { setPayment({ debt_id: debt.id, amount: debt.remaining_amount, payment_method: 'cash' }); setFormError('') }}><CreditCard size={13} />Pay</button>}</td></tr>)}</tbody></table></div><div className="form-section"><h3>Payment history</h3><p>A record of payments you’ve received.</p></div>{!loading && !payments.length ? <p className="inline-note">No payments recorded yet.</p> : payments.map(payment => <div className="payment-entry" key={payment.id}><span className="product-icon"><CreditCard size={16} /></span><div><strong>{money(payment.amount)}</strong><p>{dateLabel(payment.payment_date)} · {payment.payment_method.replaceAll('_', ' ')}</p></div><span className="mono muted">#{payment.sale_id?.slice(0, 8).toUpperCase()}</span></div>)}</div></Drawer>
+}

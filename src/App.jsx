@@ -1,69 +1,40 @@
-import { useState, useEffect } from 'react'
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
-import axios from 'axios'
-
+import { lazy, Suspense, useEffect, useState } from 'react'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import Navbar from './components/Navbar'
 import Login from './pages/Login'
 import Register from './pages/Register'
-import Dashboard from './pages/Dashboard'
-import Sales from './pages/Sales'
-import Inventory from './pages/Inventory'
-import Customers from './pages/Customers'
-import Expenses from './pages/Expenses'
-import Navbar from './components/Navbar'
-
-const API_URL = 'http://localhost:5000/api'
-
-function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
-  const [user, setUser] = useState(null)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    const token = localStorage.getItem('token')
-    const userData = localStorage.getItem('user')
-    
-    if (token && userData) {
-      setIsAuthenticated(true)
-      setUser(JSON.parse(userData))
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`
-    }
-    setLoading(false)
-  }, [])
-
-  const handleLogin = (token, userData) => {
-    localStorage.setItem('token', token)
-    localStorage.setItem('user', JSON.stringify(userData))
-    axios.defaults.headers.common['Authorization'] = `Bearer ${token}`
-    setIsAuthenticated(true)
-    setUser(userData)
-  }
-
-  const handleLogout = () => {
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Sales = lazy(() => import('./pages/Sales'))
+const Inventory = lazy(() => import('./pages/Inventory'))
+const Customers = lazy(() => import('./pages/Customers'))
+const Expenses = lazy(() => import('./pages/Expenses'))
+function savedUser() {
+  try {
+    const user = JSON.parse(localStorage.getItem('user'))
+    return localStorage.getItem('token') && user?.id ? user : null
+  } catch { return null }
+}
+export default function App() {
+  const [user, setUser] = useState(savedUser)
+  const [expired, setExpired] = useState(false)
+  const logout = () => {
     localStorage.removeItem('token')
     localStorage.removeItem('user')
-    delete axios.defaults.headers.common['Authorization']
-    setIsAuthenticated(false)
     setUser(null)
   }
-
-  if (loading) {
-    return <div className="flex items-center justify-center h-screen">Loading...</div>
+  useEffect(() => {
+    const onExpired = () => { logout(); setExpired(true) }
+    window.addEventListener('session-expired', onExpired)
+    return () => window.removeEventListener('session-expired', onExpired)
+  }, [])
+  const login = (token, userData) => {
+    localStorage.setItem('token', token)
+    localStorage.setItem('user', JSON.stringify(userData))
+    setUser(userData)
+    setExpired(false)
   }
-
-  return (
-    <Router>
-      {isAuthenticated && <Navbar user={user} onLogout={handleLogout} />}
-      <Routes>
-        <Route path="/login" element={!isAuthenticated ? <Login onLogin={handleLogin} /> : <Navigate to="/" />} />
-        <Route path="/register" element={!isAuthenticated ? <Register onLogin={handleLogin} /> : <Navigate to="/" />} />
-        <Route path="/" element={isAuthenticated ? <Dashboard /> : <Navigate to="/login" />} />
-        <Route path="/sales" element={isAuthenticated ? <Sales /> : <Navigate to="/login" />} />
-        <Route path="/inventory" element={isAuthenticated ? <Inventory /> : <Navigate to="/login" />} />
-        <Route path="/customers" element={isAuthenticated ? <Customers /> : <Navigate to="/login" />} />
-        <Route path="/expenses" element={isAuthenticated ? <Expenses /> : <Navigate to="/login" />} />
-      </Routes>
-    </Router>
-  )
+  const content = <Suspense fallback={<div className="loading-state"><span className="spinner" />Opening workspace…</div>}><Routes>
+    <Route path="/" element={<Dashboard />} /><Route path="/sales" element={<Sales />} /><Route path="/inventory" element={<Inventory />} /><Route path="/customers" element={<Customers />} /><Route path="/expenses" element={<Expenses />} /><Route path="*" element={<Navigate to="/" replace />} />
+  </Routes></Suspense>
+  return <BrowserRouter>{user ? <Navbar user={user} onLogout={logout}>{content}</Navbar> : <Routes><Route path="/login" element={<Login onLogin={login} expired={expired} />} /><Route path="/register" element={<Register onLogin={login} />} /><Route path="*" element={<Navigate to="/login" replace />} /></Routes>}</BrowserRouter>
 }
-
-export default App

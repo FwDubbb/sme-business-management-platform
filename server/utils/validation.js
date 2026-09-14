@@ -31,6 +31,9 @@ export function sendWriteError(res, error) {
   if (error.code === 'SQLITE_BUSY') {
     return res.status(503).json({ error: 'The database is busy. Please try again.' });
   }
+  if (error.code === 'SQLITE_CONSTRAINT' && error.message.includes('UNIQUE')) {
+    return res.status(409).json({ error: 'A record with these details already exists. Please use a unique name or SKU.' });
+  }
   console.error(error);
   return res.status(500).json({ error: 'Unable to save changes. Please try again.' });
 }

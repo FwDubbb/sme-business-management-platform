@@ -15,6 +15,7 @@ data/
 *.sqlite
 
 # Build
+artifacts/
 dist/
 build/
 .cache/

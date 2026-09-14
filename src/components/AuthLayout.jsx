@@ -1,0 +1,5 @@
+import { Check, Boxes, ShoppingBag, Users } from 'lucide-react'
+import { Brand } from './Navbar'
+export default function AuthLayout({ children }) {
+  return <div className="auth-layout"><section className="auth-story"><Brand /><h1>Less busywork.<br />More <em>business.</em></h1><p>A thoughtful workspace for the things that keep your business moving. Sales, stock, customers, and expenses—all together.</p><div className="auth-diagram" aria-hidden="true"><div className="diagram-bar"><i /><i /><i /></div><div className="diagram-title">Everything in its place.</div><div className="diagram-row"><ShoppingBag size={17} /><span>Every sale, accounted for.</span><Check size={15} /></div><div className="diagram-row"><Boxes size={17} /><span>Your stock, in sight.</span><Check size={15} /></div><div className="diagram-row"><Users size={17} /><span>Your customers, remembered.</span><Check size={15} /></div></div><footer>Built for the everyday work of running a business.</footer></section><section className="auth-form-side"><div className="auth-mobile-brand"><Brand /></div><div className="auth-form">{children}</div></section></div>
+}

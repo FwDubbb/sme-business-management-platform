@@ -9,6 +9,8 @@ import { getDb, closeDb } from '../db/connection.js';
 import { initializeDatabase } from '../db/init.js';
 import salesRoutes from '../routes/sales.js';
 import customersRoutes from '../routes/customers.js';
+import inventoryRoutes from '../routes/inventory.js';
+import expensesRoutes from '../routes/expenses.js';
 
 let directory, db, server, baseUrl, token;
 const previousDbPath = process.env.DB_PATH;
@@ -24,6 +26,8 @@ before(async () => {
   app.use(express.json());
   app.use('/api/sales', salesRoutes);
   app.use('/api/customers', customersRoutes);
+  app.use('/api/inventory', inventoryRoutes);
+  app.use('/api/expenses', expensesRoutes);
   server = await new Promise(resolve => {
     const listener = app.listen(0, '127.0.0.1', () => resolve(listener));
   });
@@ -55,15 +59,17 @@ beforeEach(async () => {
     DELETE FROM sales;
     DELETE FROM products;
     DELETE FROM customers;
+    DELETE FROM expenses;
+    DELETE FROM expense_categories;
     INSERT INTO customers (id, name) VALUES ('customer-a', 'Customer A'), ('customer-b', 'Customer B');
     INSERT INTO products (id, name, sku, quantity, selling_price)
       VALUES ('product-a', 'Product A', 'A', 5, 0.1), ('product-b', 'Product B', 'B', 2, 0.2);
   `);
 });
 
-async function request(route, body) {
+async function request(route, body, method = body === undefined ? 'GET' : 'POST') {
   const response = await fetch(`${baseUrl}${route}`, {
-    method: body === undefined ? 'GET' : 'POST',
+    method,
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body)
   });
@@ -198,4 +204,60 @@ test('zero-value sales are paid and do not create a pending debt', async () => {
 test('unknown sale returns 404 and sales still require authentication', async () => {
   assert.equal((await request('/sales/missing')).status, 404);
   assert.equal((await fetch(`${baseUrl}/sales`)).status, 401);
+});
+
+test('editing product metadata preserves stock and concurrent deliveries add together', async () => {
+  const result = await request('/inventory/products/product-a', { name: 'Updated product', sku: 'A', unit_cost: 1, selling_price: 2, reorder_level: 4, quantity: 999 }, 'PUT');
+  assert.equal(result.status, 200);
+  assert.equal((await db.get("SELECT quantity FROM products WHERE id = 'product-a'")).quantity, 5);
+  const deliveries = await Promise.all([
+    request('/inventory/products/product-a/restock', { quantity: 3 }),
+    request('/inventory/products/product-a/restock', { quantity: 2 })
+  ]);
+  assert.ok(deliveries.every(delivery => delivery.status === 200));
+  const product = await db.get("SELECT * FROM products WHERE id = 'product-a'");
+  assert.equal(product.quantity, 10);
+  assert.equal(product.name, 'Updated product');
+});
+
+test('inventory rejects invalid stock and duplicate SKUs without partial edits', async () => {
+  for (const quantity of [-1, 0, 1.5, '3']) assert.equal((await request('/inventory/products/product-a/restock', { quantity })).status, 400);
+  assert.equal((await request('/inventory/products/product-a', { quantity: -1 }, 'PATCH')).status, 400);
+  assert.equal((await request('/inventory/products/missing', { quantity: 1 }, 'PATCH')).status, 404);
+  assert.equal((await request('/inventory/products/product-a', { name: 'Changed', sku: 'B', unit_cost: 1, selling_price: 2 }, 'PUT')).status, 409);
+  assert.equal((await db.get("SELECT name FROM products WHERE id = 'product-a'")).name, 'Product A');
+});
+
+test('customer edits preserve debt and payment history belongs to the correct customer', async () => {
+  const debt = await createDebt();
+  assert.equal((await request('/customers/customer-a', { name: 'Updated customer', email: 'customer@example.test', credit_limit: 500, total_debt: 0 }, 'PUT')).status, 200);
+  assert.equal((await db.get("SELECT total_debt FROM customers WHERE id = 'customer-a'")).total_debt, 0.3);
+  await request('/customers/customer-a/payments', { debt_id: debt.id, amount: 0.1 });
+  const history = await request('/customers/customer-a/payments');
+  assert.equal(history.body.length, 1);
+  assert.equal(history.body[0].sale_id, debt.sale_id);
+  assert.equal(history.body[0].amount, 0.1);
+  assert.deepEqual((await request('/customers/customer-b/payments')).body, []);
+  assert.equal((await request('/customers/customer-a', { name: 'Invalid email', email: 'broken' }, 'PUT')).status, 400);
+});
+
+test('expenses preserve the chosen date and can be edited and marked paid', async () => {
+  const payload = { category: 'Supplies', description: 'Paper', amount: 12.35, expense_date: '2026-02-28', payment_method: 'card', status: 'pending' };
+  const created = await request('/expenses', payload);
+  assert.equal(created.status, 200);
+  assert.equal((await db.get('SELECT expense_date FROM expenses')).expense_date, '2026-02-28');
+  assert.equal((await request(`/expenses/${created.body.id}`, { ...payload, amount: 15.2, status: 'paid' }, 'PUT')).status, 200);
+  const expense = await db.get('SELECT * FROM expenses');
+  assert.equal(expense.amount, 15.2);
+  assert.equal(expense.status, 'paid');
+  const range = await request('/expenses/range/2026-02-28/2026-02-28');
+  assert.equal(range.body.length, 1);
+});
+
+test('invalid expense dates, amounts, methods and statuses do not create records', async () => {
+  const payload = { category: 'Supplies', amount: 10, expense_date: '2026-02-28' };
+  for (const changes of [{ expense_date: '2026-02-30' }, { expense_date: 'not-a-date' }, { amount: -1 }, { amount: 0 }, { amount: 0.001 }, { payment_method: 'invalid' }, { status: 'invalid' }, { category: '' }]) {
+    assert.equal((await request('/expenses', { ...payload, ...changes })).status, 400);
+  }
+  assert.equal((await db.get('SELECT COUNT(*) AS count FROM expenses')).count, 0);
 });

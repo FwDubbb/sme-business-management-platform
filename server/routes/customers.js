@@ -6,23 +6,51 @@ import { RequestError, moneyToCents, requireId, sendWriteError } from '../utils/
 
 const router = express.Router();
 
+function customerValues(body) {
+  const name = requireId(body.name, 'Customer name');
+  const fields = ['email', 'phone', 'address', 'city', 'state', 'zip_code'].map(key => {
+    if (body[key] != null && typeof body[key] !== 'string') throw new RequestError(`${key} must be text.`);
+    return (body[key] || '').trim();
+  });
+  if (fields[0] && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields[0])) throw new RequestError('Enter a valid email address.');
+  const credit = moneyToCents(body.credit_limit ?? 0, 'Credit limit') / 100;
+  return [name, ...fields, credit];
+}
+
 // Add customer
 router.post('/', authenticate, async (req, res) => {
   try {
-    const { name, email, phone, address, city, state, zip_code, credit_limit } = req.body;
+    const values = customerValues(req.body || {});
     const db = await getDb();
 
     const customerId = uuidv4();
     await db.run(
       `INSERT INTO customers (id, name, email, phone, address, city, state, zip_code, credit_limit)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [customerId, name, email, phone, address, city, state, zip_code, credit_limit]
+      [customerId, ...values]
     );
 
     res.json({ id: customerId });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    sendWriteError(res, error);
   }
+});
+
+router.put('/:id', authenticate, async (req, res) => {
+  try {
+    const values = customerValues(req.body || {});
+    const result = await (await getDb()).run('UPDATE customers SET name = ?, email = ?, phone = ?, address = ?, city = ?, state = ?, zip_code = ?, credit_limit = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [...values, req.params.id]);
+    if (!result.changes) throw new RequestError('Customer not found.', 404);
+    res.json({ success: true });
+  } catch (error) { sendWriteError(res, error); }
+});
+
+router.get('/:id/payments', authenticate, async (req, res) => {
+  try {
+    const payments = await (await getDb()).all(`SELECT p.*, d.sale_id FROM payments p
+      JOIN customer_debts d ON d.id = p.debt_id WHERE d.customer_id = ? ORDER BY p.payment_date DESC`, [req.params.id]);
+    res.json(payments);
+  } catch { res.status(500).json({ error: 'Unable to load payment history.' }); }
 });
 
 // Get all customers
